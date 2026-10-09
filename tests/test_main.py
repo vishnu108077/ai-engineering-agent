@@ -412,3 +412,19 @@ def test_rolled_back_repair_is_recorded(tmp_path, monkeypatch):
     assert history[0]["success"] is False
     assert history[0]["rolled_back"] is True
     assert history[0]["tests_passed"] is False
+
+
+def test_cli_history_command(monkeypatch, capsys):
+    import json
+    from app import main as main_module
+
+    expected = [{"file_path": "utils.py", "success": True}]
+
+    monkeypatch.setattr("sys.argv", ["main.py", "history"])
+    monkeypatch.setattr(
+        main_module, "load_repair_history", lambda: expected
+    )
+
+    main_module.main()
+
+    assert json.loads(capsys.readouterr().out) == expected
