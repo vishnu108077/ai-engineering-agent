@@ -47,7 +47,7 @@ The CLI coordinates the agent, while separate tool modules handle filesystem ope
 Clone the repository and enter its directory:
 
 ```bash
-git clone 
+git clone https://github.com/vishnu108077/ai-engineering-agent.git
 cd ai-engineering-agent
 ```
 
