@@ -127,6 +127,14 @@ Rules:
 
     def apply_patch_with_test_gate(self) -> dict:
         """Apply an AI patch only if tests pass; otherwise restore the file."""
+        initial_tests = run_tests(self.repository)
+
+        if initial_tests["passed"]:
+            return {
+                "success": False,
+                "message": "No repair needed: all tests already pass.",
+                "tests": initial_tests,
+            }
         proposal = self.propose_patch()
 
         if not proposal.get("success"):
