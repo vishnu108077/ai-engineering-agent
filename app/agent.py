@@ -1,8 +1,9 @@
+from app.tools.history import save_repair_history
 from pathlib import Path
 import json
 
 from httpx import patch
-
+from app.tools.history import save_repair_history
 from app.tools.patch import apply_text_patch
 from app.tools.filesystem import list_files,read_file
 from app.tools.git import get_current_branch, get_status
@@ -11,6 +12,54 @@ from app.llm import ask_ai
 
 class Agent:
     """Coordinate repository inspection tools."""
+
+
+    def _record_repair(
+        self,
+        file_path: str,
+        success: bool,
+        rolled_back: bool,
+        message: str,
+        test_result: dict | None = None,
+    ) -> None:
+        """Record a repair outcome in the repair history."""
+        record = {
+            "repository": str(Path(self.repository).resolve()),
+            "file_path": file_path,
+            "success": success,
+            "rolled_back": rolled_back,
+            "message": message,
+        }
+
+        if test_result is not None:
+            record["tests_passed"] = test_result["passed"]
+            record["test_return_code"] = test_result["return_code"]
+
+        save_repair_history(record)
+
+
+    def _record_repair(
+        self,
+        file_path: str,
+        success: bool,
+        rolled_back: bool,
+        message: str,
+        test_result: dict | None = None,
+    ) -> None:
+        """Record a repair outcome in the repair history."""
+        record = {
+            "repository": str(Path(self.repository).resolve()),
+            "file_path": file_path,
+            "success": success,
+            "rolled_back": rolled_back,
+            "message": message,
+        }
+
+        if test_result is not None:
+            record["tests_passed"] = test_result["passed"]
+            record["test_return_code"] = test_result["return_code"]
+
+        save_repair_history(record)
 
     def __init__(self, repository: str):
         self.repository = repository
@@ -127,28 +176,38 @@ Rules:
             "patch": patch,
         }
 
+
     def apply_patch_with_test_gate(self) -> dict:
-        """Apply an AI patch only if tests pass; otherwise restore the file."""
+        """Apply a patch only if tests pass; record and roll back outcomes."""
         initial_tests = run_tests(self.repository)
 
         if initial_tests["passed"]:
             return {
                 "success": False,
+                "rolled_back": False,
                 "message": "No repair needed: all tests already pass.",
                 "tests": initial_tests,
             }
+
         proposal = self.propose_patch()
 
         if not proposal.get("success"):
+            message = "Patch proposal failed."
+            self._record_repair(
+                file_path="",
+                success=False,
+                rolled_back=False,
+                message=message,
+                test_result=initial_tests,
+            )
             return {
                 "success": False,
-                "message": "Patch proposal failed.",
+                "rolled_back": False,
+                "message": message,
                 "details": proposal,
             }
 
         patch = proposal["patch"]
-
-        # Never allow an AI-generated patch to modify test files.
         patch_path = Path(patch["file_path"])
 
         if (
@@ -156,29 +215,45 @@ Rules:
             or "tests" in patch_path.parts
             or patch_path.name.startswith("test_")
         ):
+            message = "Rejected: patches to test files are not allowed."
+            self._record_repair(
+                file_path=str(patch_path),
+                success=False,
+                rolled_back=False,
+                message=message,
+                test_result=initial_tests,
+            )
             return {
                 "success": False,
-                "message": "Rejected: patches to test files are not allowed.",
+                "rolled_back": False,
+                "message": message,
             }
 
         repository_root = Path(self.repository).resolve()
         target_path = (repository_root / patch_path).resolve()
 
-
-        # Do not allow the AI to target files outside the repository.
         if not target_path.is_relative_to(repository_root):
-            return {
-                "success": False,
-                "message": "Rejected: target is outside the repository.",
-            }
+            message = "Rejected: target is outside the repository."
+            self._record_repair(
+                file_path=str(patch_path),
+                success=False,
+                rolled_back=False,
+                message=message,
+                test_result=initial_tests,
+            )
+            return {"success": False, "rolled_back": False, "message": message}
 
         if not target_path.is_file():
-            return {
-                "success": False,
-                "message": "Rejected: target must be an existing file.",
-            }
+            message = "Rejected: target must be an existing file."
+            self._record_repair(
+                file_path=str(patch_path),
+                success=False,
+                rolled_back=False,
+                message=message,
+                test_result=initial_tests,
+            )
+            return {"success": False, "rolled_back": False, "message": message}
 
-        # Keep the original contents so we can restore them if tests fail.
         original_content = target_path.read_bytes()
 
         apply_result = apply_text_patch(
@@ -190,44 +265,74 @@ Rules:
         )
 
         if not apply_result.get("applied"):
+            message = "Patch was not applied."
+            self._record_repair(
+                file_path=patch["file_path"],
+                success=False,
+                rolled_back=False,
+                message=message,
+                test_result=initial_tests,
+            )
             return {
                 "success": False,
-                "message": "Patch was not applied.",
+                "rolled_back": False,
+                "message": message,
                 "details": apply_result,
             }
 
         try:
             test_result = run_tests(self.repository)
+
             if test_result["passed"]:
+                message = "Patch applied and tests passed."
+                self._record_repair(
+                    file_path=patch["file_path"],
+                    success=True,
+                    rolled_back=False,
+                    message=message,
+                    test_result=test_result,
+                )
                 return {
-                            "success": True,
-                            "rolled_back": False,
-                            "file_path": patch["file_path"],
-                            "message": "Patch applied and tests passed.",
-                            "tests": test_result,
+                    "success": True,
+                    "rolled_back": False,
+                    "file_path": patch["file_path"],
+                    "message": message,
+                    "tests": test_result,
                 }
 
-
-            # Restore the original file if tests fail.
             target_path.write_bytes(original_content)
+            message = "Tests failed; original file was restored."
 
-            return {
-                            "success": False,
-                            "rolled_back": True,
-                            "file_path": patch["file_path"],
-                            "message": "Tests failed; original file was restored.",
-                            "tests": test_result,
-                    }
-
-
-        except Exception as error:
-            # Attempt to restore the original file after an unexpected error.
-            target_path.write_bytes(original_content)
-
+            self._record_repair(
+                file_path=patch["file_path"],
+                success=False,
+                rolled_back=True,
+                message=message,
+                test_result=test_result,
+            )
             return {
                 "success": False,
                 "rolled_back": True,
-                "message": "An error occurred; original file was restored.",
+                "file_path": patch["file_path"],
+                "message": message,
+                "tests": test_result,
+            }
+
+        except Exception as error:
+            target_path.write_bytes(original_content)
+            message = "An error occurred; original file was restored."
+
+            self._record_repair(
+                file_path=patch["file_path"],
+                success=False,
+                rolled_back=True,
+                message=message,
+            )
+            return {
+                "success": False,
+                "rolled_back": True,
+                "file_path": patch["file_path"],
+                "message": message,
                 "error": str(error),
             }
 

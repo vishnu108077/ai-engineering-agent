@@ -267,3 +267,148 @@ def test_cli_report_command_prints_markdown(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "# Engineering Analysis Report" in output
     assert "Status: PASSED" in output
+
+
+def test_repair_history_saves_and_loads_records(tmp_path):
+    from app.tools.history import (
+        load_repair_history,
+        save_repair_history,
+    )
+
+    history_file = str(tmp_path / "repair_history.json")
+
+    first_record = {
+        "file_path": "utils.py",
+        "success": True,
+        "rolled_back": False,
+    }
+    second_record = {
+        "file_path": "app.py",
+        "success": False,
+        "rolled_back": True,
+    }
+
+    save_repair_history(first_record, history_file)
+    save_repair_history(second_record, history_file)
+
+    history = load_repair_history(history_file)
+
+    assert len(history) == 2
+    assert history[0] == first_record
+    assert history[1] == second_record
+
+
+def test_successful_repair_is_recorded(tmp_path, monkeypatch):
+    import json
+    from app import agent as agent_module
+    from app.agent import Agent
+
+    repository = tmp_path
+    source = repository / "utils.py"
+    source.write_text(
+        "def calculate_total(items):\n    return sum(items) + 10\n",
+        encoding="utf-8",
+    )
+
+    history_file = tmp_path / "history.json"
+    monkeypatch.setattr(
+        agent_module,
+        "save_repair_history",
+        lambda record: history_file.write_text(
+            json.dumps(
+                json.loads(history_file.read_text()) + [record]
+                if history_file.exists()
+                else [record]
+            ),
+            encoding="utf-8",
+        ),
+    )
+
+    agent = Agent(str(repository))
+    monkeypatch.setattr(
+        agent,
+        "propose_patch",
+        lambda: {
+            "success": True,
+            "patch": {
+                "file_path": "utils.py",
+                "old_text": "return sum(items) + 10",
+                "new_text": "return sum(items)",
+            },
+        },
+    )
+
+    results = iter([
+        {"passed": False, "return_code": 1, "output": "failed"},
+        {"passed": True, "return_code": 0, "output": "passed"},
+    ])
+    monkeypatch.setattr(
+        agent_module, "run_tests", lambda repository: next(results)
+    )
+
+    result = agent.apply_patch_with_test_gate()
+    history = json.loads(history_file.read_text(encoding="utf-8"))
+
+    assert result["success"] is True
+    assert len(history) == 1
+    assert history[0]["file_path"] == "utils.py"
+    assert history[0]["success"] is True
+    assert history[0]["rolled_back"] is False
+    assert history[0]["tests_passed"] is True
+
+
+def test_rolled_back_repair_is_recorded(tmp_path, monkeypatch):
+    import json
+    from app import agent as agent_module
+    from app.agent import Agent
+
+    repository = tmp_path
+    source = repository / "utils.py"
+    original = "def calculate_total(items):\n    return sum(items) + 10\n"
+    source.write_text(original, encoding="utf-8")
+
+    history_file = tmp_path / "history.json"
+    monkeypatch.setattr(
+        agent_module,
+        "save_repair_history",
+        lambda record: history_file.write_text(
+            json.dumps(
+                json.loads(history_file.read_text()) + [record]
+                if history_file.exists()
+                else [record]
+            ),
+            encoding="utf-8",
+        ),
+    )
+
+    agent = Agent(str(repository))
+    monkeypatch.setattr(
+        agent,
+        "propose_patch",
+        lambda: {
+            "success": True,
+            "patch": {
+                "file_path": "utils.py",
+                "old_text": "return sum(items) + 10",
+                "new_text": "return sum(items) + 20",
+            },
+        },
+    )
+
+    results = iter([
+        {"passed": False, "return_code": 1, "output": "failed"},
+        {"passed": False, "return_code": 1, "output": "still failed"},
+    ])
+    monkeypatch.setattr(
+        agent_module, "run_tests", lambda repository: next(results)
+    )
+
+    result = agent.apply_patch_with_test_gate()
+    history = json.loads(history_file.read_text(encoding="utf-8"))
+
+    assert result["rolled_back"] is True
+    assert source.read_text(encoding="utf-8") == original
+    assert len(history) == 1
+    assert history[0]["success"] is False
+    assert history[0]["rolled_back"] is True
+    assert history[0]["tests_passed"] is False
