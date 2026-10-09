@@ -1,4 +1,4 @@
-
+from app.agent import Agent
 from app.main import main
 from app.tools.patch import apply_text_patch
 
@@ -60,3 +60,148 @@ def test_patch_applies_exact_replacement(tmp_path):
 
     assert result["applied"] is True
     assert target.read_text(encoding="utf-8") == expected
+
+  
+
+
+def test_repair_rejects_patches_to_test_files(tmp_path, monkeypatch):
+    from app import agent as agent_module
+
+    repository = tmp_path
+    test_file = repository / "tests" / "test_app.py"
+    test_file.parent.mkdir()
+    original = "def test_example():\n    assert 1 == 2\n"
+    test_file.write_text(original, encoding="utf-8")
+
+    instance = Agent(str(repository))
+
+    # Simulate a failing test run so the agent attempts a repair.
+    monkeypatch.setattr(
+        agent_module,
+        "run_tests",
+        lambda repository: {
+            "passed": False,
+            "return_code": 1,
+            "output": "1 failed",
+        },
+    )
+
+    # Simulate an AI proposal that tries to modify a test file.
+    monkeypatch.setattr(
+        instance,
+        "propose_patch",
+        lambda: {
+            "success": True,
+            "patch": {
+                "file_path": "tests/test_app.py",
+                "old_text": "assert 1 == 2",
+                "new_text": "assert 1 == 1",
+            },
+        },
+    )
+
+    result = instance.apply_patch_with_test_gate()
+
+    assert result["success"] is False
+    assert "test files are not allowed" in result["message"]
+    assert test_file.read_text(encoding="utf-8") == original
+
+
+def test_repair_rolls_back_when_tests_still_fail(tmp_path, monkeypatch):
+    from app import agent as agent_module
+    from app.agent import Agent
+
+    repository = tmp_path
+    tests_dir = repository / "tests"
+    tests_dir.mkdir()
+
+    source = repository / "utils.py"
+    original = (
+        "def calculate_total(items):\n"
+        "    return sum(items) + 10\n"
+    )
+    source.write_text(original, encoding="utf-8")
+
+    test_file = tests_dir / "test_app.py"
+    test_file.write_text(
+        "from utils import calculate_total\n\n"
+        "def test_calculate_total():\n"
+        "    assert calculate_total([10, 20, 30]) == 60\n",
+        encoding="utf-8",
+    )
+
+    agent = Agent(str(repository))
+
+    # Supply a patch that does not fix the bug.
+    monkeypatch.setattr(
+        agent,
+        "propose_patch",
+        lambda: {
+            "success": True,
+            "patch": {
+                "file_path": "utils.py",
+                "old_text": "return sum(items) + 10",
+                "new_text": "return sum(items) + 20",
+            },
+        },
+    )
+
+    # Keep the real pytest runner so both test runs are genuine.
+    result = agent.apply_patch_with_test_gate()
+
+    assert result["success"] is False
+    assert result["rolled_back"] is True
+    assert source.read_text(encoding="utf-8") == original
+
+
+def test_successful_repair_reports_file_and_rollback_status(
+    tmp_path, monkeypatch
+):
+    from app import agent as agent_module
+    from app.agent import Agent
+
+    repository = tmp_path
+    source = repository / "utils.py"
+    original = "def calculate_total(items):\n    return sum(items) + 10\n"
+    fixed = "def calculate_total(items):\n    return sum(items)\n"
+    source.write_text(original, encoding="utf-8")
+
+    agent = Agent(str(repository))
+
+    monkeypatch.setattr(
+        agent_module,
+        "run_tests",
+        lambda repository: {"passed": False,
+                            "return_code": 1, "output": "failed"},
+    )
+    monkeypatch.setattr(
+        agent,
+        "propose_patch",
+        lambda: {
+            "success": True,
+            "patch": {
+                "file_path": "utils.py",
+                "old_text": "return sum(items) + 10",
+                "new_text": "return sum(items)",
+            },
+        },
+    )
+
+    # The initial test run fails; the post-patch run passes.
+    results = iter([
+        {"passed": False, "return_code": 1, "output": "failed"},
+        {"passed": True, "return_code": 0, "output": "passed"},
+    ])
+    monkeypatch.setattr(
+        agent_module, "run_tests", lambda repository: next(results)
+    )
+
+    result = agent.apply_patch_with_test_gate()
+
+    assert result["success"] is True
+    assert result["rolled_back"] is False
+    assert result["file_path"] == "utils.py"
+    assert source.read_text(encoding="utf-8") == fixed
+
+
+    

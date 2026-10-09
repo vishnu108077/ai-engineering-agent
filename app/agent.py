@@ -1,6 +1,8 @@
 from pathlib import Path
 import json
 
+from httpx import patch
+
 from app.tools.patch import apply_text_patch
 from app.tools.filesystem import list_files,read_file
 from app.tools.git import get_current_branch, get_status
@@ -145,8 +147,23 @@ Rules:
             }
 
         patch = proposal["patch"]
+
+        # Never allow an AI-generated patch to modify test files.
+        patch_path = Path(patch["file_path"])
+
+        if (
+            patch_path.is_absolute()
+            or "tests" in patch_path.parts
+            or patch_path.name.startswith("test_")
+        ):
+            return {
+                "success": False,
+                "message": "Rejected: patches to test files are not allowed.",
+            }
+
         repository_root = Path(self.repository).resolve()
-        target_path = (repository_root / patch["file_path"]).resolve()
+        target_path = (repository_root / patch_path).resolve()
+
 
         # Do not allow the AI to target files outside the repository.
         if not target_path.is_relative_to(repository_root):
@@ -181,23 +198,27 @@ Rules:
 
         try:
             test_result = run_tests(self.repository)
-
             if test_result["passed"]:
                 return {
-                    "success": True,
-                    "message": "Patch applied and tests passed.",
-                    "tests": test_result,
+                            "success": True,
+                            "rolled_back": False,
+                            "file_path": patch["file_path"],
+                            "message": "Patch applied and tests passed.",
+                            "tests": test_result,
                 }
+
 
             # Restore the original file if tests fail.
             target_path.write_bytes(original_content)
 
             return {
-                "success": False,
-                "rolled_back": True,
-                "message": "Tests failed; original file was restored.",
-                "tests": test_result,
-            }
+                            "success": False,
+                            "rolled_back": True,
+                            "file_path": patch["file_path"],
+                            "message": "Tests failed; original file was restored.",
+                            "tests": test_result,
+                    }
+
 
         except Exception as error:
             # Attempt to restore the original file after an unexpected error.
