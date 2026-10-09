@@ -111,7 +111,51 @@ Display CLI help:
 ```bash
 python -m app.main --help
 ```
+## Demo Walkthrough
 
+The repository includes a small demo project at `examples/demo_repo` for exercising the agent's inspection and reporting workflows.
+
+### 1. Run the automated tests
+
+```bash
+pytest
+```
+
+Expected result: all 13 project tests pass.
+
+### 2. Inspect the demo repository
+
+```bash
+python -m app.main inspect --repo examples/demo_repo
+```
+
+The agent reports the Git branch, working-tree status, discovered files, and test results.
+
+### 3. Generate an engineering report
+
+```bash
+python -m app.main report --repo examples/demo_repo
+```
+
+The Markdown report includes repository information, test status, diagnosis, and raw test output.
+
+### 4. Attempt an automated repair
+
+```bash
+python -m app.main repair --repo examples/demo_repo
+```
+
+The agent skips repair if tests already pass. If tests fail, it requests a patch proposal and applies safety checks. A patch is retained only if the subsequent test run succeeds; otherwise, the original file is restored.
+
+### What this demonstrates
+
+- Python CLI design and modular tool integration
+- AI-assisted debugging and structured patch proposals
+- Automated testing and defensive file handling
+- Test-gated changes and rollback behavior
+- Engineering reporting and JSON-based repair history
+
+The demo is a development example, not a guarantee that every AI-proposed repair will be correct. Review proposed changes before using the agent on important repositories.
 ## Testing
 
 Run the project's automated test suite:
