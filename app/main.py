@@ -12,7 +12,7 @@ def main():
 
     parser.add_argument(
         "command",
-        choices=["inspect", "analyze", "repair"],
+        choices=["inspect", "analyze", "repair", "report"],
         help="Action to perform on the target repository",
     )
 
@@ -33,7 +33,10 @@ def main():
 
     elif args.command == "repair":
         result = agent.apply_patch_with_test_gate()
-
+    elif args.command == "report":
+        report = agent.generate_report()
+        print(agent.format_report(report))
+        return
     print(json.dumps(result, indent=2))
 
 

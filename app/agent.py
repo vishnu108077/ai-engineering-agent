@@ -269,8 +269,7 @@ Rules:
 - **Path:** {report["repository"]}
 - **Branch:** {report["branch"]}
 - **Modified files:** {report["git_status"] or "None detected"}
-- **Python files inspected:** {report["files_inspected"]}
-
+- **Files inspected:** {report["files_inspected"]}
 ## Test Results
 - **Status:** {test_status}
 

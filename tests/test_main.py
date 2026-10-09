@@ -230,3 +230,40 @@ def test_generate_report_includes_test_summary(tmp_path, monkeypatch):
     assert report["test_return_code"] == 0
     assert report["files_inspected"] == 2
     assert "does not prove the repository is bug-free" in report["diagnosis"]
+
+
+def test_cli_report_command_prints_markdown(monkeypatch, capsys):
+    from app import main as main_module
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["main.py", "report", "--repo", "examples/demo_repo"],
+    )
+
+    monkeypatch.setattr(
+        main_module.Agent,
+        "generate_report",
+        lambda self: {
+            "repository": "demo_repo",
+            "branch": "master",
+            "git_status": "",
+            "files_inspected": 4,
+            "test_summary": "PASSED",
+            "tests_passed": True,
+            "test_return_code": 0,
+            "test_output": "1 passed",
+            "diagnosis": "Tests passed.",
+        },
+    )
+
+    monkeypatch.setattr(
+        main_module.Agent,
+        "format_report",
+        lambda self, report: "# Engineering Analysis Report\n\nStatus: PASSED",
+    )
+
+    main_module.main()
+
+    output = capsys.readouterr().out
+    assert "# Engineering Analysis Report" in output
+    assert "Status: PASSED" in output
