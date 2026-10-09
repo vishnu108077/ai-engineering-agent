@@ -235,22 +235,27 @@ Rules:
     def generate_report(self) -> dict:
         """Generate a structured engineering report."""
         snapshot = self.inspect_repository()
+        tests = snapshot["tests"]
 
-        if snapshot["tests"]["passed"]:
+        if tests["passed"]:
             diagnosis = (
                 "Tests passed. No current test failure was detected. "
                 "This does not prove the repository is bug-free."
             )
+            test_summary = "PASSED"
         else:
             diagnosis = self.analyze_failure()
+            test_summary = "FAILED"
 
         return {
-            "repository": self.repository,
+            "repository": str(Path(self.repository).resolve()),
             "branch": snapshot["branch"],
             "git_status": snapshot["status"],
             "files_inspected": len(snapshot["files"]),
-            "tests_passed": snapshot["tests"]["passed"],
-            "test_output": snapshot["tests"]["output"],
+            "test_summary": test_summary,
+            "tests_passed": tests["passed"],
+            "test_return_code": tests["return_code"],
+            "test_output": tests["output"],
             "diagnosis": diagnosis,
         }
 

@@ -204,4 +204,29 @@ def test_successful_repair_reports_file_and_rollback_status(
     assert source.read_text(encoding="utf-8") == fixed
 
 
-    
+def test_generate_report_includes_test_summary(tmp_path, monkeypatch):
+    from app import agent as agent_module
+    from app.agent import Agent
+
+    agent = Agent(str(tmp_path))
+
+    snapshot = {
+        "branch": "main",
+        "status": "",
+        "files": ["utils.py", "README.md"],
+        "tests": {
+            "passed": True,
+            "return_code": 0,
+            "output": "1 passed",
+        },
+    }
+
+    monkeypatch.setattr(agent, "inspect_repository", lambda: snapshot)
+
+    report = agent.generate_report()
+
+    assert report["test_summary"] == "PASSED"
+    assert report["tests_passed"] is True
+    assert report["test_return_code"] == 0
+    assert report["files_inspected"] == 2
+    assert "does not prove the repository is bug-free" in report["diagnosis"]
