@@ -8,3 +8,4 @@ remediation, and validates changes through automated tests.
 
 Project initialization.
 
+AI Engineering Automation Agent
